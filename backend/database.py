@@ -1,8 +1,11 @@
 import os
+import logging
 from sqlalchemy import create_engine, Column, Integer, Numeric, Date, Text, LargeBinary, String, DateTime, Boolean, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://receipt_user:receipt_pass@postgres:5432/receipts_db")
 
@@ -61,25 +64,31 @@ REQUIRED_COLUMNS = [
 
 
 def create_tables():
-    """Skapa tabeller om de inte finns, och lägg till saknade kolumner i befintliga."""
+    """Skapa tabeller om de inte finns, och lägg till saknade kolumner i befintliga.
+
+    Varje DDL-sats körs i en separat transaktion via engine.begin() så att ett
+    misslyckat ALTER TABLE inte aborterar resten av migreringen. PostgreSQL
+    sätter annars hela transaktionen i ett felläge och efterföljande satser
+    ignoreras tyst – även om undantaget fångas.
+    """
     Base.metadata.create_all(bind=engine)
 
-    # Lägg till nya kolumner i befintlig tabell utan att radera data
-    with engine.connect() as conn:
-        for col_name, col_type in REQUIRED_COLUMNS:
-            try:
+    for col_name, col_type in REQUIRED_COLUMNS:
+        try:
+            with engine.begin() as conn:
                 conn.execute(text(
                     f"ALTER TABLE receipts ADD COLUMN IF NOT EXISTS {col_name} {col_type}"
                 ))
-            except Exception:
-                pass  # Kolumnen finns redan eller annan harmlös konflikt
+            logger.debug("Kolumn OK: %s", col_name)
+        except Exception as exc:
+            logger.error("Migrering av kolumn '%s' misslyckades – appen kan krascha: %s", col_name, exc)
 
-        # Migrera gammal "amount"-kolumn till "amount_gross" om den finns
-        try:
+    # Migrera gammal "amount"-kolumn till "amount_gross" om den finns.
+    # Misslyckas tyst om kolumnen inte existerar (förväntat på nya installationer).
+    try:
+        with engine.begin() as conn:
             conn.execute(text(
                 "UPDATE receipts SET amount_gross = amount WHERE amount_gross IS NULL AND amount IS NOT NULL"
             ))
-        except Exception:
-            pass
-
-        conn.commit()
+    except Exception:
+        pass
