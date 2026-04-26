@@ -96,6 +96,48 @@ function ReceiptModal({ receipt, userColor, onClose, onUpdated, onDeleted, onRes
 
   const parse = (v) => v !== '' ? parseFloat(String(v).replace(',', '.')) : null
 
+  const calcFromGross = (gross, rate) => {
+    const g = parseFloat(String(gross).replace(',', '.'))
+    const r = parseFloat(String(rate).replace(',', '.'))
+    if (!isNaN(g) && !isNaN(r) && r > 0) {
+      const net = g / (1 + r / 100)
+      setAmountNet(net.toFixed(2))
+      setVatAmount((g - net).toFixed(2))
+    }
+  }
+
+  const handleGrossChange = (val) => {
+    setAmountGross(val)
+    calcFromGross(val, vatRate)
+  }
+
+  const handleNetChange = (val) => {
+    setAmountNet(val)
+    const r = parseFloat(String(vatRate).replace(',', '.'))
+    const net = parseFloat(String(val).replace(',', '.'))
+    if (!isNaN(net) && !isNaN(r) && r > 0) {
+      const gross = net * (1 + r / 100)
+      setAmountGross(gross.toFixed(2))
+      setVatAmount((gross - net).toFixed(2))
+    }
+  }
+
+  const handleVatRateChange = (val) => {
+    setVatRate(val)
+    const r = parseFloat(String(val).replace(',', '.'))
+    if (!isNaN(r) && r > 0) {
+      const gross = parseFloat(String(amountGross).replace(',', '.'))
+      const net = parseFloat(String(amountNet).replace(',', '.'))
+      if (!isNaN(gross)) {
+        calcFromGross(amountGross, val)
+      } else if (!isNaN(net)) {
+        const newGross = net * (1 + r / 100)
+        setAmountGross(newGross.toFixed(2))
+        setVatAmount((newGross - net).toFixed(2))
+      }
+    }
+  }
+
   const handleSave = async () => {
     setSaving(true); setError(null)
     try {
@@ -257,20 +299,20 @@ function ReceiptModal({ receipt, userColor, onClose, onUpdated, onDeleted, onRes
               </div>
 
               <div style={m.sectionLabel}>Belopp & moms</div>
+              <div style={{ maxWidth: 160, marginBottom: 14 }}>
+                <MField label="Momssats (%)">
+                  <input style={inputBase} type="number" step="1" value={vatRate} onChange={e => handleVatRateChange(e.target.value)} placeholder="25" />
+                </MField>
+              </div>
               <div style={m.grid3}>
                 <MField label="Brutto inkl. moms">
-                  <input style={inputBase} type="number" step="0.01" value={amountGross} onChange={e => setAmountGross(e.target.value)} placeholder="249.90" />
+                  <input style={inputBase} type="number" step="0.01" value={amountGross} onChange={e => handleGrossChange(e.target.value)} placeholder="249.90" />
                 </MField>
                 <MField label="Netto exkl. moms">
-                  <input style={inputBase} type="number" step="0.01" value={amountNet} onChange={e => setAmountNet(e.target.value)} placeholder="199.92" />
+                  <input style={inputBase} type="number" step="0.01" value={amountNet} onChange={e => handleNetChange(e.target.value)} placeholder="199.92" />
                 </MField>
                 <MField label="Momsbelopp">
                   <input style={inputBase} type="number" step="0.01" value={vatAmount} onChange={e => setVatAmount(e.target.value)} placeholder="49.98" />
-                </MField>
-              </div>
-              <div style={{ maxWidth: 160, marginTop: 14 }}>
-                <MField label="Momssats (%)">
-                  <input style={inputBase} type="number" step="1" value={vatRate} onChange={e => setVatRate(e.target.value)} placeholder="25" />
                 </MField>
               </div>
             </>
