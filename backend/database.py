@@ -27,7 +27,9 @@ class Receipt(Base):
     image_data = Column(LargeBinary, nullable=True)
     image_filename = Column(String(255), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
-    is_deleted = Column(Boolean, default=False, nullable=False, server_default='false')
+    is_deleted         = Column(Boolean, default=False, nullable=False, server_default='false')
+    is_archived        = Column(Boolean, default=False, nullable=False, server_default='false')
+    is_archive_summary = Column(Boolean, default=False, nullable=False, server_default='false')
 
 
 def get_db():
@@ -52,7 +54,9 @@ REQUIRED_COLUMNS = [
     ("image_data",   "BYTEA"),
     ("image_filename","VARCHAR(255)"),
     ("created_at",   "TIMESTAMP"),
-    ("is_deleted",   "BOOLEAN NOT NULL DEFAULT FALSE"),
+    ("is_deleted",        "BOOLEAN NOT NULL DEFAULT FALSE"),
+    ("is_archived",       "BOOLEAN NOT NULL DEFAULT FALSE"),
+    ("is_archive_summary","BOOLEAN NOT NULL DEFAULT FALSE"),
 ]
 
 

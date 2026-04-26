@@ -131,13 +131,62 @@ export default function ReceiptForm({ ocrResult, onSaved, onBack, authName = nul
   const [amountGross, setAmountGross] = useState(ocrResult?.amount_gross?.toFixed(2) ?? '')
   const [amountNet,   setAmountNet]   = useState(ocrResult?.amount_net?.toFixed(2) ?? '')
   const [vatAmount,   setVatAmount]   = useState(ocrResult?.vat_amount?.toFixed(2) ?? '')
-  const [vatRate,     setVatRate]     = useState(ocrResult?.vat_rate ?? '')
+  const [vatRate,     setVatRate]     = useState(ocrResult?.vat_rate ?? 25)
   const [receiptDate, setReceiptDate] = useState(ocrResult?.date ?? '')
   const [showRaw,     setShowRaw]     = useState(false)
   const [loading,     setLoading]     = useState(false)
   const [error,       setError]       = useState(null)
   const [success,     setSuccess]     = useState(false)
   const [dupInfo,     setDupInfo]     = useState(null)   // null | { is_duplicate, duplicate_id, duplicate_date, duplicate_store, duplicate_amount }
+
+  const calcFromGross = (gross, rate, setNet, setVat) => {
+    const g = parseFloat(String(gross).replace(',', '.'))
+    const r = parseFloat(String(rate).replace(',', '.'))
+    if (!isNaN(g) && !isNaN(r) && r > 0) {
+      const net = g / (1 + r / 100)
+      setNet(net.toFixed(2))
+      setVat((g - net).toFixed(2))
+    }
+  }
+
+  const handleGrossChange = (val) => {
+    setAmountGross(val)
+    calcFromGross(val, vatRate, setAmountNet, setVatAmount)
+  }
+
+  const handleNetChange = (val) => {
+    setAmountNet(val)
+    const r = parseFloat(String(vatRate).replace(',', '.'))
+    const net = parseFloat(String(val).replace(',', '.'))
+    if (!isNaN(net) && !isNaN(r) && r > 0) {
+      const gross = net * (1 + r / 100)
+      setAmountGross(gross.toFixed(2))
+      setVatAmount((gross - net).toFixed(2))
+    }
+  }
+
+  const handleVatRateChange = (val) => {
+    setVatRate(val)
+    const r = parseFloat(String(val).replace(',', '.'))
+    if (!isNaN(r) && r > 0) {
+      const gross = parseFloat(String(amountGross).replace(',', '.'))
+      const net = parseFloat(String(amountNet).replace(',', '.'))
+      if (!isNaN(gross)) {
+        calcFromGross(amountGross, val, setAmountNet, setVatAmount)
+      } else if (!isNaN(net)) {
+        const newGross = net * (1 + r / 100)
+        setAmountGross(newGross.toFixed(2))
+        setVatAmount((newGross - net).toFixed(2))
+      }
+    }
+  }
+
+  // Auto-beräkna netto vid start om bara brutto finns från OCR
+  useEffect(() => {
+    if (ocrResult?.amount_gross && !ocrResult?.amount_net) {
+      calcFromGross(ocrResult.amount_gross, ocrResult?.vat_rate ?? 25, setAmountNet, setVatAmount)
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Kör dublettkontroll när OCR-data laddas in
   useEffect(() => {
@@ -171,7 +220,14 @@ export default function ReceiptForm({ ocrResult, onSaved, onBack, authName = nul
   }
 
   const handleSubmit = async () => {
-    if (!amountGross && !receiptDate) { setError('Fyll i minst belopp eller datum.'); return }
+    const missing = []
+    if (!storeName?.trim()) missing.push('Butik / företag')
+    if (!receiptDate)       missing.push('Datum')
+    if (!amountGross)       missing.push('Bruttobelopp')
+    if (!amountNet)         missing.push('Nettobelopp')
+    if (!vatAmount)         missing.push('Momsbelopp')
+    if (vatRate === '' || vatRate == null) missing.push('Momssats')
+    if (missing.length > 0) { setError(`Fyll i alla obligatoriska fält: ${missing.join(', ')}`); return }
     setLoading(true); setError(null)
     try {
       try { localStorage.setItem('receipt_user_name', userName) } catch {}
@@ -318,24 +374,24 @@ export default function ReceiptForm({ ocrResult, onSaved, onBack, authName = nul
       {/* Belopp & moms */}
       <div style={s.section}>
         <div style={s.sectionTitle}>Belopp & moms</div>
+        <div style={{ marginBottom: 14, maxWidth: 180 }}>
+          <Field label="Momssats (%)" found={!!ocrResult.vat_rate}>
+            <input style={inputBase} type="number" step="1" placeholder="25"
+              value={vatRate} onChange={e => handleVatRateChange(e.target.value)} />
+          </Field>
+        </div>
         <div style={s.grid3}>
           <Field label="Brutto inkl. moms" found={!!ocrResult.amount_gross}>
             <input style={inputBase} type="number" step="0.01" placeholder="249.90"
-              value={amountGross} onChange={e => setAmountGross(e.target.value)} />
+              value={amountGross} onChange={e => handleGrossChange(e.target.value)} />
           </Field>
           <Field label="Netto exkl. moms" found={!!ocrResult.amount_net}>
             <input style={inputBase} type="number" step="0.01" placeholder="199.92"
-              value={amountNet} onChange={e => setAmountNet(e.target.value)} />
+              value={amountNet} onChange={e => handleNetChange(e.target.value)} />
           </Field>
           <Field label="Momsbelopp (kr)" found={!!ocrResult.vat_amount}>
             <input style={inputBase} type="number" step="0.01" placeholder="49.98"
               value={vatAmount} onChange={e => setVatAmount(e.target.value)} />
-          </Field>
-        </div>
-        <div style={{ marginTop: 14, maxWidth: 180 }}>
-          <Field label="Momssats (%)" found={!!ocrResult.vat_rate}>
-            <input style={inputBase} type="number" step="1" placeholder="25"
-              value={vatRate} onChange={e => setVatRate(e.target.value)} />
           </Field>
         </div>
       </div>
