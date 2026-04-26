@@ -1,0 +1,11 @@
+node_modules/
+__pycache__/
+*.pyc
+.env
+.DS_Store
+dist/
+key.txt
+*.key
+*.pem
+*.p12
+*.pfx

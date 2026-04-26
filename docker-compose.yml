@@ -1,0 +1,49 @@
+version: '3.9'
+
+services:
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: receipt_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-receipts_db}
+      POSTGRES_USER: ${POSTGRES_USER:-receipt_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-receipt_user} -d ${POSTGRES_DB:-receipts_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    image: ${GHCR_IMAGE}-backend:latest
+    container_name: receipt_backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-receipt_user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-receipts_db}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      ENABLE_AUTH: ${ENABLE_AUTH:-false}
+      IMAGE_MAX_PX: ${IMAGE_MAX_PX:-1600}
+      IMAGE_QUALITY: ${IMAGE_QUALITY:-72}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  frontend:
+    image: ${GHCR_IMAGE}-frontend:latest
+    container_name: receipt_frontend
+    restart: unless-stopped
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
