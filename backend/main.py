@@ -16,7 +16,7 @@ from fastapi import FastAPI, File, Form, UploadFile, Depends, HTTPException, Req
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, Response
 from pydantic import BaseModel
-from sqlalchemy import func
+from sqlalchemy import func, extract
 from sqlalchemy.orm import Session
 
 from database import get_db, create_tables, Receipt
@@ -386,10 +386,180 @@ def save_receipt(data: ReceiptCreate, db: Session = Depends(get_db), _: None = D
     }
 
 
+# ─────────────────────────────────────────────────────────────────── #
+# Arkivering                                                           #
+# ─────────────────────────────────────────────────────────────────── #
+
+@app.get("/api/receipts/years")
+def list_years(db: Session = Depends(get_db), _: None = Depends(require_auth)):
+    """Returnerar år med kvitton samt om de är fullständigt arkiverade."""
+    year_rows = (
+        db.query(extract('year', Receipt.receipt_date).label('yr'))
+        .filter(Receipt.is_deleted == False, Receipt.receipt_date != None)  # noqa: E711
+        .distinct()
+        .all()
+    )
+    years_all = sorted({int(r.yr) for r in year_rows}, reverse=True)
+
+    result = []
+    for yr in years_all:
+        active_count = db.query(Receipt).filter(
+            Receipt.is_deleted == False,
+            Receipt.is_archived == False,
+            Receipt.is_archive_summary == False,
+            extract('year', Receipt.receipt_date) == yr,
+        ).count()
+        has_summary = db.query(Receipt).filter(
+            Receipt.is_archive_summary == True,
+            extract('year', Receipt.receipt_date) == yr,
+        ).count() > 0
+        result.append({
+            "year": yr,
+            "receipt_count": active_count,
+            "is_archived": has_summary and active_count == 0,
+        })
+    return result
+
+
+@app.get("/api/receipts/archive-preview/{year}")
+def archive_preview(year: int, db: Session = Depends(get_db), _: None = Depends(require_auth)):
+    """Förhandsgranska arkivering: per-användare-summor för ett år."""
+    if not (1900 <= year <= 2200):
+        raise HTTPException(status_code=400, detail="Ogiltigt år.")
+
+    already_archived = db.query(Receipt).filter(
+        Receipt.is_archive_summary == True,
+        extract('year', Receipt.receipt_date) == year,
+    ).count() > 0
+
+    candidates = db.query(Receipt).filter(
+        Receipt.is_deleted == False,
+        Receipt.is_archived == False,
+        Receipt.is_archive_summary == False,
+        Receipt.receipt_date != None,  # noqa: E711
+        extract('year', Receipt.receipt_date) == year,
+    ).all()
+
+    undated_count = db.query(Receipt).filter(
+        Receipt.is_deleted == False,
+        Receipt.is_archived == False,
+        Receipt.is_archive_summary == False,
+        Receipt.receipt_date == None,  # noqa: E711
+    ).count()
+
+    user_map: dict = {}
+    for r in candidates:
+        key = r.user_name
+        if key not in user_map:
+            user_map[key] = {
+                "receipt_count": 0,
+                "amount_net_total":   Decimal('0'),
+                "amount_gross_total": Decimal('0'),
+                "vat_amount_total":   Decimal('0'),
+            }
+        user_map[key]["receipt_count"] += 1
+        user_map[key]["amount_net_total"]   += r.amount_net   if r.amount_net   is not None else (r.amount_gross or Decimal('0'))
+        user_map[key]["amount_gross_total"] += r.amount_gross if r.amount_gross is not None else Decimal('0')
+        user_map[key]["vat_amount_total"]   += r.vat_amount   if r.vat_amount   is not None else Decimal('0')
+
+    users = sorted(
+        [
+            {
+                "user_name":         k,
+                "receipt_count":     v["receipt_count"],
+                "amount_net_total":  float(v["amount_net_total"]),
+                "amount_gross_total":float(v["amount_gross_total"]),
+                "vat_amount_total":  float(v["vat_amount_total"]),
+            }
+            for k, v in user_map.items()
+        ],
+        key=lambda x: x["amount_net_total"],
+        reverse=True,
+    )
+
+    return {
+        "year": year,
+        "already_archived": already_archived,
+        "total_receipts": len(candidates),
+        "undated_count": undated_count,
+        "users": users,
+    }
+
+
+@app.post("/api/receipts/archive/{year}", status_code=200)
+def archive_year(year: int, db: Session = Depends(get_db), _: None = Depends(require_auth)):
+    """Arkivera alla kvitton för ett år och skapa en sammanfattningstransaktion per användare."""
+    if not (1900 <= year <= 2200):
+        raise HTTPException(status_code=400, detail="Ogiltigt år.")
+
+    existing = db.query(Receipt).filter(
+        Receipt.is_archive_summary == True,
+        extract('year', Receipt.receipt_date) == year,
+    ).first()
+    if existing:
+        raise HTTPException(status_code=400, detail=f"År {year} är redan arkiverat.")
+
+    candidates = (
+        db.query(Receipt)
+        .filter(
+            Receipt.is_deleted == False,
+            Receipt.is_archived == False,
+            Receipt.is_archive_summary == False,
+            Receipt.receipt_date != None,  # noqa: E711
+            extract('year', Receipt.receipt_date) == year,
+        )
+        .with_for_update()
+        .all()
+    )
+
+    if not candidates:
+        raise HTTPException(status_code=400, detail=f"Inga kvitton att arkivera för år {year}.")
+
+    user_map2: dict = {}
+    for r in candidates:
+        key = r.user_name
+        if key not in user_map2:
+            user_map2[key] = {"count": 0, "net": Decimal('0'), "gross": Decimal('0'), "vat": Decimal('0')}
+        user_map2[key]["count"] += 1
+        user_map2[key]["net"]   += r.amount_net   if r.amount_net   is not None else (r.amount_gross or Decimal('0'))
+        user_map2[key]["gross"] += r.amount_gross if r.amount_gross is not None else Decimal('0')
+        user_map2[key]["vat"]   += r.vat_amount   if r.vat_amount   is not None else Decimal('0')
+
+    for user_name, totals in user_map2.items():
+        count = totals["count"]
+        db.add(Receipt(
+            user_name=user_name,
+            store_name=f"Årsarkiv {year}",
+            receipt_date=date(year, 12, 31),
+            amount_net=totals["net"],
+            amount_gross=totals["gross"],
+            vat_amount=totals["vat"],
+            vat_rate=None,
+            comment=f"Arkiverad sammanfattning: {count} kvitto{'n' if count != 1 else ''}",
+            is_archive_summary=True,
+            is_archived=False,
+            is_deleted=False,
+            image_data=None,
+            image_filename=None,
+            raw_ocr_response=None,
+        ))
+
+    for r in candidates:
+        r.is_archived = True
+
+    db.commit()
+
+    return {
+        "year": year,
+        "archived_count": len(candidates),
+        "summaries_created": len(user_map2),
+    }
+
+
 @app.get("/api/receipts")
 def list_receipts(db: Session = Depends(get_db), _: None = Depends(require_auth)):
     """Hämta alla sparade kvitton (utan bilddata)."""
-    rows = db.query(Receipt).filter(Receipt.is_deleted == False).order_by(Receipt.created_at.desc()).all()
+    rows = db.query(Receipt).filter(Receipt.is_deleted == False, Receipt.is_archived == False).order_by(Receipt.created_at.desc()).all()
     return [
         {
             "id": r.id,
@@ -404,6 +574,7 @@ def list_receipts(db: Session = Depends(get_db), _: None = Depends(require_auth)
             "image_filename": r.image_filename,
             "has_image": r.image_data is not None,
             "created_at": r.created_at.isoformat(),
+            "is_archive_summary": r.is_archive_summary,
         }
         for r in rows
     ]
@@ -423,7 +594,12 @@ class ReceiptUpdate(BaseModel):
 @app.put("/api/receipts/{receipt_id}", status_code=200)
 def update_receipt(receipt_id: int, data: ReceiptUpdate, db: Session = Depends(get_db), _: None = Depends(require_auth)):
     """Uppdatera ett befintligt kvitto."""
-    receipt = db.query(Receipt).filter(Receipt.id == receipt_id, Receipt.is_deleted == False).first()
+    receipt = db.query(Receipt).filter(
+        Receipt.id == receipt_id,
+        Receipt.is_deleted == False,
+        Receipt.is_archived == False,
+        Receipt.is_archive_summary == False,
+    ).first()
     if not receipt:
         raise HTTPException(status_code=404, detail="Kvittot hittades inte.")
 
@@ -463,6 +639,8 @@ def soft_delete_receipt(receipt_id: int, db: Session = Depends(get_db), _: None 
     receipt = db.query(Receipt).filter(Receipt.id == receipt_id).first()
     if not receipt:
         raise HTTPException(status_code=404, detail="Kvittot hittades inte.")
+    if receipt.is_archive_summary:
+        raise HTTPException(status_code=403, detail="Arkivsammanfattningar kan inte raderas.")
     if receipt.is_deleted:
         raise HTTPException(status_code=400, detail="Kvittot är redan borttaget.")
     receipt.is_deleted = True
@@ -473,7 +651,7 @@ def soft_delete_receipt(receipt_id: int, db: Session = Depends(get_db), _: None 
 @app.get("/api/receipts/deleted")
 def list_deleted_receipts(db: Session = Depends(get_db), _: None = Depends(require_auth)):
     """Hämta alla soft-deletade kvitton."""
-    rows = db.query(Receipt).filter(Receipt.is_deleted == True).order_by(Receipt.created_at.desc()).all()
+    rows = db.query(Receipt).filter(Receipt.is_deleted == True, Receipt.is_archived == False).order_by(Receipt.created_at.desc()).all()
     return [
         {
             "id": r.id,
@@ -536,6 +714,8 @@ def check_duplicate_single(data: DuplicateCheckSingle, db: Session = Depends(get
 
     query = db.query(Receipt).filter(
         Receipt.is_deleted == False,
+        Receipt.is_archived == False,
+        Receipt.is_archive_summary == False,
         Receipt.amount_gross.between(
             Decimal(str(data.amount_gross - 0.01)),
             Decimal(str(data.amount_gross + 0.01)),
@@ -564,7 +744,11 @@ def export_receipts_csv(
     _: None = Depends(require_auth),
 ):
     """Exportera kvitton som CSV, valfritt filtrerat på datumspann."""
-    query = db.query(Receipt).filter(Receipt.is_deleted == False)
+    query = db.query(Receipt).filter(
+        Receipt.is_deleted == False,
+        Receipt.is_archived == False,
+        Receipt.is_archive_summary == False,
+    )
 
     if date_from:
         try:
@@ -716,6 +900,8 @@ def _is_duplicate(row: dict, db: Session) -> Optional[int]:
 
     query = db.query(Receipt).filter(
         Receipt.is_deleted == False,
+        Receipt.is_archived == False,
+        Receipt.is_archive_summary == False,
         Receipt.receipt_date == receipt_date,
         Receipt.amount_gross.between(
             Decimal(str(amount_gross - 0.01)),

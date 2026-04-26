@@ -274,6 +274,14 @@ function ReceiptModal({ receipt, userColor, onClose, onUpdated, onDeleted, onRes
 
         {/* Body */}
         <div style={m.body}>
+          {receipt.is_archive_summary && (
+            <div style={{
+              background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.3)',
+              borderRadius: 8, padding: '10px 14px', fontSize: 13, color: '#a78bfa', marginBottom: 16,
+            }}>
+              📦 Detta är en arkivsammanfattning och kan inte redigeras.
+            </div>
+          )}
           {editing ? (
             <>
               <div style={m.sectionLabel}>Inlämnad av</div>
@@ -346,7 +354,9 @@ function ReceiptModal({ receipt, userColor, onClose, onUpdated, onDeleted, onRes
 
         {/* Footer */}
         <div style={m.footer}>
-          {isDeleted ? (
+          {receipt.is_archive_summary ? (
+            <button style={m.btnSecondary} onClick={onClose}>Stäng</button>
+          ) : isDeleted ? (
             <>
               <button style={m.btnSecondary} onClick={onClose}>Stäng</button>
               <button style={{ ...m.btnPrimary, background: '#34d399' }} onClick={handleRestore} disabled={restoring}>
@@ -446,6 +456,197 @@ function ExportPanel() {
             border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13, cursor: 'pointer', height: 42,
           }}>
             Avbryt
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/* ══════════════════════════════════════════════════════════════════════════ */
+/* Arkiveringspanel                                                           */
+/* ══════════════════════════════════════════════════════════════════════════ */
+function ArchivePanel({ onArchived }) {
+  const [open,          setOpen]         = useState(false)
+  const [years,         setYears]        = useState([])
+  const [selectedYear,  setSelectedYear] = useState('')
+  const [preview,       setPreview]      = useState(null)
+  const [loadingYears,  setLoadingYears] = useState(false)
+  const [loadingPrev,   setLoadingPrev]  = useState(false)
+  const [confirming,    setConfirming]   = useState(false)
+  const [archiving,     setArchiving]    = useState(false)
+  const [result,        setResult]       = useState(null)
+  const [error,         setError]        = useState(null)
+
+  const openPanel = async () => {
+    setOpen(true)
+    setLoadingYears(true)
+    setError(null)
+    try {
+      const res = await fetch('/api/receipts/years')
+      if (res.ok) setYears(await res.json())
+    } catch { /* noop */ }
+    finally { setLoadingYears(false) }
+  }
+
+  const handleYearChange = async (yr) => {
+    setSelectedYear(yr)
+    setPreview(null)
+    setConfirming(false)
+    setError(null)
+    if (!yr) return
+    setLoadingPrev(true)
+    try {
+      const res = await fetch(`/api/receipts/archive-preview/${yr}`)
+      if (res.ok) setPreview(await res.json())
+      else { const e = await res.json(); setError(e.detail || 'Kunde inte hämta förhandsgranskning') }
+    } catch { setError('Nätverksfel') }
+    finally { setLoadingPrev(false) }
+  }
+
+  const handleArchive = async () => {
+    setArchiving(true); setError(null)
+    try {
+      const res = await fetch(`/api/receipts/archive/${selectedYear}`, { method: 'POST' })
+      if (res.ok) {
+        setResult(await res.json())
+        setConfirming(false)
+        onArchived()
+      } else { const e = await res.json(); setError(e.detail || 'Arkivering misslyckades') }
+    } catch { setError('Nätverksfel') }
+    finally { setArchiving(false) }
+  }
+
+  const handleClose = () => {
+    setOpen(false); setSelectedYear(''); setPreview(null)
+    setConfirming(false); setResult(null); setError(null)
+  }
+
+  const fmtKrLocal = (v) => v != null
+    ? Number(v).toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' kr'
+    : '—'
+
+  const archivableCount = preview && !preview.already_archived ? preview.total_receipts : 0
+
+  if (!open) {
+    return (
+      <button onClick={openPanel} style={{
+        padding: '8px 16px', background: 'transparent',
+        color: '#a78bfa', border: `1px solid ${C.border}`,
+        borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer',
+      }}>
+        📦 Arkivera år
+      </button>
+    )
+  }
+
+  return (
+    <div style={{
+      background: C.surfaceDeep, border: `1px solid ${C.border}`,
+      borderRadius: 12, padding: '16px 18px', minWidth: 280,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+        <span style={{ fontSize: 13, fontWeight: 700, color: '#a78bfa' }}>📦 Arkivera år</span>
+        <button onClick={handleClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.textMuted, fontSize: 18, lineHeight: 1 }}>×</button>
+      </div>
+
+      {result ? (
+        <div>
+          <div style={{ background: 'rgba(52,211,153,0.1)', color: '#34d399', borderRadius: 8, padding: '10px 14px', fontSize: 13, marginBottom: 12 }}>
+            ✅ {result.archived_count} kvitton arkiverade för {result.year}. {result.summaries_created} sammanfattning{result.summaries_created !== 1 ? 'ar' : ''} skapade.
+          </div>
+          <button onClick={handleClose} style={{ padding: '8px 16px', background: C.accent, color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
+            Stäng
+          </button>
+        </div>
+      ) : confirming ? (
+        <div>
+          <div style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.25)', borderRadius: 8, padding: '12px 14px', fontSize: 13, color: '#fcd34d', marginBottom: 14 }}>
+            ⚠️ Du är på väg att arkivera <strong>{archivableCount} kvitton</strong> för {selectedYear}.<br />
+            <span style={{ color: '#d97706', fontSize: 12 }}>Detta kan inte ångras från gränssnittet.</span>
+          </div>
+          {error && <div style={{ color: C.red, fontSize: 13, marginBottom: 10 }}>⚠️ {error}</div>}
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={() => setConfirming(false)} style={{ padding: '8px 14px', background: 'transparent', color: C.textMuted, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13, cursor: 'pointer' }}>Avbryt</button>
+            <button onClick={handleArchive} disabled={archiving} style={{ padding: '8px 16px', background: '#a78bfa', color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: archiving ? 'not-allowed' : 'pointer', opacity: archiving ? 0.6 : 1 }}>
+              {archiving ? '⏳ Arkiverar...' : '📦 Bekräfta arkivering'}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginBottom: 14 }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Välj år</span>
+            <select
+              value={selectedYear}
+              onChange={e => handleYearChange(e.target.value)}
+              style={{ ...inputBase, width: 150, cursor: 'pointer' }}
+            >
+              <option value="">{loadingYears ? 'Laddar...' : '— Välj år —'}</option>
+              {years.map(y => (
+                <option key={y.year} value={y.year}>
+                  {y.year}{y.is_archived ? ' (arkiverat)' : ` · ${y.receipt_count} kvitton`}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {loadingPrev && <div style={{ fontSize: 13, color: C.textMuted }}>⏳ Hämtar förhandsgranskning...</div>}
+
+          {preview && (
+            <div style={{ marginBottom: 14 }}>
+              {preview.already_archived && (
+                <div style={{ background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.3)', borderRadius: 8, padding: '8px 12px', fontSize: 12, color: '#a78bfa', marginBottom: 10 }}>
+                  📦 {selectedYear} är redan arkiverat.
+                  {preview.total_receipts > 0 && ` (${preview.total_receipts} nya kvitton har lagts till efter arkiveringen och ingår inte.)`}
+                </div>
+              )}
+              {preview.undated_count > 0 && (
+                <div style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.25)', borderRadius: 8, padding: '8px 12px', fontSize: 12, color: '#fcd34d', marginBottom: 10 }}>
+                  ⚠️ {preview.undated_count} kvitton saknar datum och ingår inte i arkiveringen.
+                </div>
+              )}
+              {preview.total_receipts > 0 && !preview.already_archived && (
+                <div style={{ overflowX: 'auto', borderRadius: 8, border: `1px solid ${C.border}`, marginBottom: 12 }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                    <thead>
+                      <tr>
+                        <th style={{ padding: '6px 10px', background: C.surfaceDeep, color: C.textMuted, fontWeight: 600, textAlign: 'left', borderBottom: `1px solid ${C.border}` }}>Användare</th>
+                        <th style={{ padding: '6px 10px', background: C.surfaceDeep, color: C.textMuted, fontWeight: 600, textAlign: 'right', borderBottom: `1px solid ${C.border}` }}>Kvitton</th>
+                        <th style={{ padding: '6px 10px', background: C.surfaceDeep, color: C.textMuted, fontWeight: 600, textAlign: 'right', borderBottom: `1px solid ${C.border}` }}>Nettosumma</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {preview.users.map((u, i) => (
+                        <tr key={i}>
+                          <td style={{ padding: '5px 10px', color: C.text, borderBottom: `1px solid rgba(45,49,72,0.4)` }}>{u.user_name || 'Okänd'}</td>
+                          <td style={{ padding: '5px 10px', color: C.textMuted, textAlign: 'right', borderBottom: `1px solid rgba(45,49,72,0.4)` }}>{u.receipt_count}</td>
+                          <td style={{ padding: '5px 10px', color: C.text, fontWeight: 600, textAlign: 'right', borderBottom: `1px solid rgba(45,49,72,0.4)` }}>{fmtKrLocal(u.amount_net_total)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              {preview.total_receipts === 0 && !preview.already_archived && (
+                <div style={{ fontSize: 13, color: C.textMuted }}>Inga kvitton att arkivera för {selectedYear}.</div>
+              )}
+            </div>
+          )}
+
+          {error && <div style={{ color: C.red, fontSize: 13, marginBottom: 10 }}>⚠️ {error}</div>}
+
+          <button
+            onClick={() => setConfirming(true)}
+            disabled={!preview || preview.already_archived || archivableCount === 0}
+            style={{
+              padding: '8px 16px', background: '#a78bfa', color: '#fff',
+              border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 600,
+              cursor: (!preview || preview.already_archived || archivableCount === 0) ? 'not-allowed' : 'pointer',
+              opacity: (!preview || preview.already_archived || archivableCount === 0) ? 0.4 : 1,
+            }}
+          >
+            📦 Arkivera {selectedYear || '…'}
           </button>
         </div>
       )}
@@ -597,7 +798,10 @@ export default function ReceiptList() {
             <h2 style={{ ...s.title, marginBottom: 2 }}>📊 Utlägg senaste 30 dagarna</h2>
             <p style={s.subtitle}>Belopp exkl. moms per användare · {receipts.length} kvitton totalt</p>
           </div>
-          <ExportPanel />
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <ExportPanel />
+            <ArchivePanel onArchived={fetchAll} />
+          </div>
         </div>
 
         {/* Diagram */}
@@ -676,20 +880,26 @@ export default function ReceiptList() {
         {sorted.length === 0 ? (
           <div style={s.noData}>Inga kvitton sparade ännu.</div>
         ) : paginated.map(r => {
-          const user  = r.user_name || 'Okänd'
-          const color = userColor[user] || C.textMuted
-          const net   = r.amount_net ?? r.amount_gross
+          const user      = r.user_name || 'Okänd'
+          const color     = userColor[user] || C.textMuted
+          const net       = r.amount_net ?? r.amount_gross
+          const isSummary = r.is_archive_summary
           return (
             <div
               key={r.id}
-              style={s.listItem}
+              style={{
+                ...s.listItem,
+                ...(isSummary ? { background: 'rgba(167,139,250,0.04)', borderLeft: '3px solid rgba(167,139,250,0.4)', paddingLeft: 10 } : {}),
+              }}
               onClick={() => setSelected(r)}
-              onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.04)'}
-              onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+              onMouseEnter={e => e.currentTarget.style.background = isSummary ? 'rgba(167,139,250,0.1)' : 'rgba(255,255,255,0.04)'}
+              onMouseLeave={e => e.currentTarget.style.background = isSummary ? 'rgba(167,139,250,0.04)' : 'transparent'}
             >
               <div style={s.itemLeft}>
                 <div style={s.itemRow1}>
-                  <span style={s.itemStore}>{r.store_name || '(okänd butik)'}</span>
+                  <span style={isSummary ? { ...s.itemStore, color: '#a78bfa' } : s.itemStore}>
+                    {isSummary ? '📦 ' : ''}{r.store_name || '(okänd butik)'}
+                  </span>
                 </div>
                 <div style={s.itemRow2}>
                   <span style={s.itemUser}>
