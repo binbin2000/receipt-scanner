@@ -157,7 +157,7 @@ export default function ReceiptForm({ ocrResult, onSaved, onBack, authName = nul
   const calcFromGross = (gross, rate, setNet, setVat) => {
     const g = parseFloat(String(gross).replace(',', '.'))
     const r = parseFloat(String(rate).replace(',', '.'))
-    if (!isNaN(g) && !isNaN(r) && r > 0) {
+    if (!isNaN(g) && !isNaN(r) && r >= 0) {
       const net = g / (1 + r / 100)
       setNet(net.toFixed(2))
       setVat((g - net).toFixed(2))
@@ -173,7 +173,7 @@ export default function ReceiptForm({ ocrResult, onSaved, onBack, authName = nul
     setAmountNet(val)
     const r = parseFloat(String(vatRate).replace(',', '.'))
     const net = parseFloat(String(val).replace(',', '.'))
-    if (!isNaN(net) && !isNaN(r) && r > 0) {
+    if (!isNaN(net) && !isNaN(r) && r >= 0) {
       const gross = net * (1 + r / 100)
       setAmountGross(gross.toFixed(2))
       setVatAmount((gross - net).toFixed(2))
@@ -183,7 +183,7 @@ export default function ReceiptForm({ ocrResult, onSaved, onBack, authName = nul
   const handleVatRateChange = (val) => {
     setVatRate(val)
     const r = parseFloat(String(val).replace(',', '.'))
-    if (!isNaN(r) && r > 0) {
+    if (!isNaN(r) && r >= 0) {
       const gross = parseFloat(String(amountGross).replace(',', '.'))
       const net = parseFloat(String(amountNet).replace(',', '.'))
       if (!isNaN(gross)) {
