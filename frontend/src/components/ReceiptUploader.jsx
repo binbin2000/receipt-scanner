@@ -445,7 +445,7 @@ function ManualReceiptModal({ onClose, onSaved, authName = null }) {
   const calcFromGross = (gross, rate) => {
     const g = parseFloat(String(gross).replace(',', '.'))
     const r = parseFloat(String(rate).replace(',', '.'))
-    if (!isNaN(g) && !isNaN(r) && r > 0) {
+    if (!isNaN(g) && !isNaN(r) && r >= 0) {
       const net = g / (1 + r / 100)
       setAmountNet(net.toFixed(2))
       setVatAmount((g - net).toFixed(2))
@@ -461,7 +461,7 @@ function ManualReceiptModal({ onClose, onSaved, authName = null }) {
     setAmountNet(val)
     const r = parseFloat(String(vatRate).replace(',', '.'))
     const net = parseFloat(String(val).replace(',', '.'))
-    if (!isNaN(net) && !isNaN(r) && r > 0) {
+    if (!isNaN(net) && !isNaN(r) && r >= 0) {
       const gross = net * (1 + r / 100)
       setAmountGross(gross.toFixed(2))
       setVatAmount((gross - net).toFixed(2))
@@ -474,6 +474,8 @@ function ManualReceiptModal({ onClose, onSaved, authName = null }) {
     const rate = isNaN(r) ? 0 : r
     // Utländsk valuta: netto är ankaret (= foreign_amount × kurs), räkna om brutto
     if (currency !== 'SEK' && foreignAmount !== '') {
+    if (!isNaN(r) && r >= 0) {
+      const gross = parseFloat(String(amountGross).replace(',', '.'))
       const net = parseFloat(String(amountNet).replace(',', '.'))
       if (!isNaN(net)) {
         const newGross = (net * (1 + rate / 100)).toFixed(2)
