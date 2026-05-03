@@ -489,8 +489,10 @@ function ManualReceiptModal({ onClose, onSaved, authName = null }) {
     if (val === 'SEK') {
       setExchangeRate('1.0')
       setForeignAmount('')
-    } else if (rateCache[val]) {
-      setExchangeRate(String(rateCache[val]))
+      setVatRate(25)
+    } else {
+      setVatRate(0)
+      if (rateCache[val]) setExchangeRate(String(rateCache[val]))
     }
   }
 
@@ -499,9 +501,12 @@ function ManualReceiptModal({ onClose, onSaved, authName = null }) {
     const fa = parseFloat(String(val).replace(',', '.'))
     const er = parseFloat(String(exchangeRate).replace(',', '.'))
     if (!isNaN(fa) && !isNaN(er) && er > 0) {
-      const gross = (fa * er).toFixed(2)
+      const net = (fa * er).toFixed(2)
+      setAmountNet(net)
+      const r = parseFloat(String(vatRate).replace(',', '.'))
+      const gross = (parseFloat(net) * (1 + (isNaN(r) ? 0 : r) / 100)).toFixed(2)
       setAmountGross(gross)
-      calcFromGross(gross, vatRate)
+      setVatAmount((parseFloat(gross) - parseFloat(net)).toFixed(2))
     }
   }
 
@@ -510,9 +515,12 @@ function ManualReceiptModal({ onClose, onSaved, authName = null }) {
     const fa = parseFloat(String(foreignAmount).replace(',', '.'))
     const er = parseFloat(String(val).replace(',', '.'))
     if (!isNaN(fa) && !isNaN(er) && er > 0) {
-      const gross = (fa * er).toFixed(2)
+      const net = (fa * er).toFixed(2)
+      setAmountNet(net)
+      const r = parseFloat(String(vatRate).replace(',', '.'))
+      const gross = (parseFloat(net) * (1 + (isNaN(r) ? 0 : r) / 100)).toFixed(2)
       setAmountGross(gross)
-      calcFromGross(gross, vatRate)
+      setVatAmount((parseFloat(gross) - parseFloat(net)).toFixed(2))
     }
   }
 
