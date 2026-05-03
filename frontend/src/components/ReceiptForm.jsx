@@ -186,8 +186,6 @@ export default function ReceiptForm({ ocrResult, onSaved, onBack, authName = nul
     const rate = isNaN(r) ? 0 : r
     // Utländsk valuta: netto är ankaret (= foreign_amount × kurs), räkna om brutto
     if (currency !== 'SEK' && foreignAmount !== '') {
-    if (!isNaN(r) && r >= 0) {
-      const gross = parseFloat(String(amountGross).replace(',', '.'))
       const net = parseFloat(String(amountNet).replace(',', '.'))
       if (!isNaN(net)) {
         const newGross = (net * (1 + rate / 100)).toFixed(2)
@@ -197,7 +195,7 @@ export default function ReceiptForm({ ocrResult, onSaved, onBack, authName = nul
       }
     }
     // SEK: brutto är ankaret
-    if (rate > 0) {
+    if (rate >= 0) {
       const gross = parseFloat(String(amountGross).replace(',', '.'))
       const net   = parseFloat(String(amountNet).replace(',', '.'))
       if (!isNaN(gross)) {
