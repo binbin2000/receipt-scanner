@@ -124,20 +124,35 @@ const getSaved = (key, fallback = '') => {
   try { return localStorage.getItem(key) ?? fallback } catch { return fallback }
 }
 
+const CURRENCIES = ['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK', 'CHF', 'JPY', 'PLN', 'CZK', 'HUF', 'CAD', 'AUD']
+
 export default function ReceiptForm({ ocrResult, onSaved, onBack, authName = null }) {
-  const [userName,    setUserName]    = useState(authName ?? getSaved('receipt_user_name'))
-  const [comment,     setComment]     = useState(ocrResult?.item_summary ?? '')
-  const [storeName,   setStoreName]   = useState(ocrResult?.store_name ?? '')
-  const [amountGross, setAmountGross] = useState(ocrResult?.amount_gross?.toFixed(2) ?? '')
-  const [amountNet,   setAmountNet]   = useState(ocrResult?.amount_net?.toFixed(2) ?? '')
-  const [vatAmount,   setVatAmount]   = useState(ocrResult?.vat_amount?.toFixed(2) ?? '')
-  const [vatRate,     setVatRate]     = useState(ocrResult?.vat_rate ?? 25)
-  const [receiptDate, setReceiptDate] = useState(ocrResult?.date ?? '')
-  const [showRaw,     setShowRaw]     = useState(false)
-  const [loading,     setLoading]     = useState(false)
-  const [error,       setError]       = useState(null)
-  const [success,     setSuccess]     = useState(false)
-  const [dupInfo,     setDupInfo]     = useState(null)   // null | { is_duplicate, duplicate_id, duplicate_date, duplicate_store, duplicate_amount }
+  const [userName,       setUserName]       = useState(authName ?? getSaved('receipt_user_name'))
+  const [comment,        setComment]        = useState(ocrResult?.item_summary ?? '')
+  const [storeName,      setStoreName]      = useState(ocrResult?.store_name ?? '')
+  const [amountGross,    setAmountGross]    = useState(ocrResult?.amount_gross?.toFixed(2) ?? '')
+  const [amountNet,      setAmountNet]      = useState(ocrResult?.amount_net?.toFixed(2) ?? '')
+  const [vatAmount,      setVatAmount]      = useState(ocrResult?.vat_amount?.toFixed(2) ?? '')
+  const [vatRate,        setVatRate]        = useState(ocrResult?.vat_rate ?? 25)
+  const [receiptDate,    setReceiptDate]    = useState(ocrResult?.date ?? '')
+  const [currency,       setCurrency]       = useState(ocrResult?.currency ?? 'SEK')
+  const [foreignAmount,  setForeignAmount]  = useState(ocrResult?.foreign_amount?.toFixed(2) ?? '')
+  const [exchangeRate,   setExchangeRate]   = useState('1.0')
+  const [rateCache,      setRateCache]      = useState({})
+  const [showRaw,        setShowRaw]        = useState(false)
+  const [loading,        setLoading]        = useState(false)
+  const [error,          setError]          = useState(null)
+  const [success,        setSuccess]        = useState(false)
+  const [dupInfo,        setDupInfo]        = useState(null)   // null | { is_duplicate, duplicate_id, duplicate_date, duplicate_store, duplicate_amount }
+
+  // Hämta valutakurscachen vid mount
+  useEffect(() => {
+    fetch('/api/exchange-rates').then(r => r.ok ? r.json() : {}).then(data => {
+      setRateCache(data)
+      const cur = ocrResult?.currency ?? 'SEK'
+      if (cur !== 'SEK' && data[cur]) setExchangeRate(String(data[cur]))
+    }).catch(() => {})
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const calcFromGross = (gross, rate, setNet, setVat) => {
     const g = parseFloat(String(gross).replace(',', '.'))
@@ -178,6 +193,38 @@ export default function ReceiptForm({ ocrResult, onSaved, onBack, authName = nul
         setAmountGross(newGross.toFixed(2))
         setVatAmount((newGross - net).toFixed(2))
       }
+    }
+  }
+
+  const handleCurrencyChange = (val) => {
+    setCurrency(val)
+    if (val === 'SEK') {
+      setExchangeRate('1.0')
+      setForeignAmount('')
+    } else if (rateCache[val]) {
+      setExchangeRate(String(rateCache[val]))
+    }
+  }
+
+  const handleForeignAmountChange = (val) => {
+    setForeignAmount(val)
+    const fa = parseFloat(String(val).replace(',', '.'))
+    const er = parseFloat(String(exchangeRate).replace(',', '.'))
+    if (!isNaN(fa) && !isNaN(er) && er > 0) {
+      const gross = (fa * er).toFixed(2)
+      setAmountGross(gross)
+      calcFromGross(gross, vatRate, setAmountNet, setVatAmount)
+    }
+  }
+
+  const handleExchangeRateChange = (val) => {
+    setExchangeRate(val)
+    const fa = parseFloat(String(foreignAmount).replace(',', '.'))
+    const er = parseFloat(String(val).replace(',', '.'))
+    if (!isNaN(fa) && !isNaN(er) && er > 0) {
+      const gross = (fa * er).toFixed(2)
+      setAmountGross(gross)
+      calcFromGross(gross, vatRate, setAmountNet, setVatAmount)
     }
   }
 
@@ -232,6 +279,7 @@ export default function ReceiptForm({ ocrResult, onSaved, onBack, authName = nul
     try {
       try { localStorage.setItem('receipt_user_name', userName) } catch {}
       const parse = (v) => v !== '' && v != null ? parseFloat(String(v).replace(',', '.')) : null
+      const isForeign = currency !== 'SEK'
       const body = {
         user_name: userName || null,
         store_name: storeName || null,
@@ -239,6 +287,9 @@ export default function ReceiptForm({ ocrResult, onSaved, onBack, authName = nul
         amount_net: parse(amountNet),
         vat_amount: parse(vatAmount),
         vat_rate: parse(vatRate),
+        currency: currency || 'SEK',
+        foreign_amount: isForeign ? parse(foreignAmount) : null,
+        exchange_rate: isForeign ? parse(exchangeRate) : 1.0,
         raw_ocr_response: ocrResult.raw_ocr_response ?? null,
         receipt_date: receiptDate || null,
         comment: comment || null,
@@ -374,6 +425,30 @@ export default function ReceiptForm({ ocrResult, onSaved, onBack, authName = nul
       {/* Belopp & moms */}
       <div style={s.section}>
         <div style={s.sectionTitle}>Belopp & moms</div>
+
+        {/* Valuta */}
+        <div style={{ display: 'grid', gridTemplateColumns: '160px 1fr', gap: 14, marginBottom: 14, alignItems: 'end' }}>
+          <Field label="Valuta" found={!!ocrResult.currency}>
+            <select style={{ ...inputBase, cursor: 'pointer' }} value={currency} onChange={e => handleCurrencyChange(e.target.value)}>
+              {CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </Field>
+          {currency !== 'SEK' && (
+            <Field label={`Belopp i ${currency} (originalvaluta)`} found={!!ocrResult.foreign_amount}>
+              <input style={inputBase} type="number" step="0.01" placeholder="0.00"
+                value={foreignAmount} onChange={e => handleForeignAmountChange(e.target.value)} />
+            </Field>
+          )}
+        </div>
+        {currency !== 'SEK' && (
+          <div style={{ marginBottom: 14, maxWidth: 260 }}>
+            <Field label={`Valutakurs (SEK per 1 ${currency})`} found={false}>
+              <input style={inputBase} type="number" step="0.0001" placeholder="11.50"
+                value={exchangeRate} onChange={e => handleExchangeRateChange(e.target.value)} />
+            </Field>
+          </div>
+        )}
+
         <div style={{ marginBottom: 14, maxWidth: 180 }}>
           <Field label="Momssats (%)" found={!!ocrResult.vat_rate}>
             <input style={inputBase} type="number" step="1" placeholder="25"
@@ -381,15 +456,15 @@ export default function ReceiptForm({ ocrResult, onSaved, onBack, authName = nul
           </Field>
         </div>
         <div style={s.grid3}>
-          <Field label="Brutto inkl. moms" found={!!ocrResult.amount_gross}>
+          <Field label="Brutto inkl. moms (SEK)" found={!!ocrResult.amount_gross}>
             <input style={inputBase} type="number" step="0.01" placeholder="249.90"
               value={amountGross} onChange={e => handleGrossChange(e.target.value)} />
           </Field>
-          <Field label="Netto exkl. moms" found={!!ocrResult.amount_net}>
+          <Field label="Netto exkl. moms (SEK)" found={!!ocrResult.amount_net}>
             <input style={inputBase} type="number" step="0.01" placeholder="199.92"
               value={amountNet} onChange={e => handleNetChange(e.target.value)} />
           </Field>
-          <Field label="Momsbelopp (kr)" found={!!ocrResult.vat_amount}>
+          <Field label="Momsbelopp (SEK)" found={!!ocrResult.vat_amount}>
             <input style={inputBase} type="number" step="0.01" placeholder="49.98"
               value={vatAmount} onChange={e => setVatAmount(e.target.value)} />
           </Field>

@@ -19,7 +19,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, extract
 from sqlalchemy.orm import Session
 
-from database import get_db, create_tables, Receipt
+from database import get_db, create_tables, Receipt, ExchangeRateCache
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -101,7 +101,7 @@ def get_me(request: Request):
 # Claude Vision OCR                                                            #
 # --------------------------------------------------------------------------- #
 
-OCR_PROMPT = """Du är en expert på att läsa svenska kvitton. Analysera bilden noggrant och extrahera:
+OCR_PROMPT = """Du är en expert på att läsa kvitton och fakturor. Analysera bilden noggrant och extrahera:
 
 1. Butiksnamn / företagsnamn – vanligtvis längst upp på kvittot
 2. Datum – ange i formatet YYYY-MM-DD
@@ -118,6 +118,13 @@ OCR_PROMPT = """Du är en expert på att läsa svenska kvitton. Analysera bilden
    Exempel: "Frukt, mejeri och chark." eller "Lunch och dryck." eller "Bensin 47 liter."
    Om varorna inte går att läsa, sätt till null.
 
+5. Valuta – identifiera vilken valuta som används på kvittot:
+   - currency: valutakod enligt ISO 4217 (t.ex. "SEK", "EUR", "USD", "GBP", "NOK", "DKK", "CHF", "JPY").
+     Titta på valutasymboler (€, $, £, kr, Fr.), landets språk, butiksnamn och prisformat.
+     Om valutan är oklar eller ser ut att vara svenska kronor, ange "SEK".
+   - foreign_amount: om valutan INTE är SEK, ange totalbeloppet (amount_gross) i originalvalutan.
+     Om valutan är SEK, sätt foreign_amount till null.
+
 Svara ENBART med giltig JSON (inga andra ord):
 {
   "store_name": "ICA Maxi Kungälv",
@@ -126,6 +133,8 @@ Svara ENBART med giltig JSON (inga andra ord):
   "amount_net": 199.92,
   "vat_amount": 49.98,
   "vat_rate": 25,
+  "currency": "SEK",
+  "foreign_amount": null,
   "item_summary": "Livsmedel inkl. frukt, mejeri och charkuterier.",
   "confidence": "high",
   "notes": "valfri kommentar om osäkerhet eller om kvittot är svårläst"
@@ -309,6 +318,8 @@ async def ocr_receipt(file: UploadFile = File(...), _: None = Depends(require_au
         "amount_net": result.get("amount_net"),
         "vat_amount": result.get("vat_amount"),
         "vat_rate": result.get("vat_rate"),
+        "currency": result.get("currency") or "SEK",
+        "foreign_amount": result.get("foreign_amount"),
         "date": result.get("date"),
         "confidence": result.get("confidence"),
         "notes": result.get("notes"),
@@ -329,6 +340,9 @@ class ReceiptCreate(BaseModel):
     amount_net: Optional[float] = None
     vat_amount: Optional[float] = None
     vat_rate: Optional[float] = None
+    currency: str = 'SEK'
+    foreign_amount: Optional[float] = None
+    exchange_rate: Optional[float] = 1.0
     raw_ocr_response: Optional[str] = None
     receipt_date: Optional[str] = None
     comment: Optional[str] = None
@@ -356,6 +370,7 @@ def save_receipt(data: ReceiptCreate, db: Session = Depends(get_db), _: None = D
         except Exception:
             pass
 
+    currency = (data.currency or 'SEK').upper().strip()
     receipt = Receipt(
         user_name=_normalize_name(data.user_name),
         store_name=data.store_name,
@@ -363,6 +378,9 @@ def save_receipt(data: ReceiptCreate, db: Session = Depends(get_db), _: None = D
         amount_net=to_decimal(data.amount_net),
         vat_amount=to_decimal(data.vat_amount),
         vat_rate=to_decimal(data.vat_rate),
+        currency=currency,
+        foreign_amount=to_decimal(data.foreign_amount),
+        exchange_rate=to_decimal(data.exchange_rate) if data.exchange_rate is not None else Decimal('1.0'),
         raw_ocr_response=data.raw_ocr_response,
         receipt_date=parsed_date,
         comment=data.comment,
@@ -370,6 +388,9 @@ def save_receipt(data: ReceiptCreate, db: Session = Depends(get_db), _: None = D
         image_filename=data.image_filename,
     )
     db.add(receipt)
+
+    _upsert_exchange_rate(db, currency, data.exchange_rate)
+
     db.commit()
     db.refresh(receipt)
 
@@ -380,6 +401,9 @@ def save_receipt(data: ReceiptCreate, db: Session = Depends(get_db), _: None = D
         "amount_net": float(receipt.amount_net) if receipt.amount_net else None,
         "vat_amount": float(receipt.vat_amount) if receipt.vat_amount else None,
         "vat_rate": float(receipt.vat_rate) if receipt.vat_rate else None,
+        "currency": receipt.currency,
+        "foreign_amount": float(receipt.foreign_amount) if receipt.foreign_amount else None,
+        "exchange_rate": float(receipt.exchange_rate) if receipt.exchange_rate else None,
         "receipt_date": receipt.receipt_date.isoformat() if receipt.receipt_date else None,
         "comment": receipt.comment,
         "created_at": receipt.created_at.isoformat(),
@@ -569,6 +593,9 @@ def list_receipts(db: Session = Depends(get_db), _: None = Depends(require_auth)
             "amount_net": float(r.amount_net) if r.amount_net else None,
             "vat_amount": float(r.vat_amount) if r.vat_amount else None,
             "vat_rate": float(r.vat_rate) if r.vat_rate else None,
+            "currency": r.currency or 'SEK',
+            "foreign_amount": float(r.foreign_amount) if r.foreign_amount else None,
+            "exchange_rate": float(r.exchange_rate) if r.exchange_rate else None,
             "receipt_date": r.receipt_date.isoformat() if r.receipt_date else None,
             "comment": r.comment,
             "image_filename": r.image_filename,
@@ -587,6 +614,9 @@ class ReceiptUpdate(BaseModel):
     amount_net: Optional[float] = None
     vat_amount: Optional[float] = None
     vat_rate: Optional[float] = None
+    currency: str = 'SEK'
+    foreign_amount: Optional[float] = None
+    exchange_rate: Optional[float] = 1.0
     receipt_date: Optional[str] = None
     comment: Optional[str] = None
 
@@ -603,12 +633,16 @@ def update_receipt(receipt_id: int, data: ReceiptUpdate, db: Session = Depends(g
     if not receipt:
         raise HTTPException(status_code=404, detail="Kvittot hittades inte.")
 
+    currency = (data.currency or 'SEK').upper().strip()
     receipt.user_name = _normalize_name(data.user_name)
     receipt.store_name = data.store_name
     receipt.amount_gross = to_decimal(data.amount_gross)
     receipt.amount_net = to_decimal(data.amount_net)
     receipt.vat_amount = to_decimal(data.vat_amount)
     receipt.vat_rate = to_decimal(data.vat_rate)
+    receipt.currency = currency
+    receipt.foreign_amount = to_decimal(data.foreign_amount)
+    receipt.exchange_rate = to_decimal(data.exchange_rate) if data.exchange_rate is not None else Decimal('1.0')
     receipt.comment = data.comment
     if data.receipt_date:
         try:
@@ -617,6 +651,8 @@ def update_receipt(receipt_id: int, data: ReceiptUpdate, db: Session = Depends(g
             pass
     else:
         receipt.receipt_date = None
+
+    _upsert_exchange_rate(db, currency, data.exchange_rate)
 
     db.commit()
     db.refresh(receipt)
@@ -628,6 +664,9 @@ def update_receipt(receipt_id: int, data: ReceiptUpdate, db: Session = Depends(g
         "amount_net": float(receipt.amount_net) if receipt.amount_net else None,
         "vat_amount": float(receipt.vat_amount) if receipt.vat_amount else None,
         "vat_rate": float(receipt.vat_rate) if receipt.vat_rate else None,
+        "currency": receipt.currency,
+        "foreign_amount": float(receipt.foreign_amount) if receipt.foreign_amount else None,
+        "exchange_rate": float(receipt.exchange_rate) if receipt.exchange_rate else None,
         "receipt_date": receipt.receipt_date.isoformat() if receipt.receipt_date else None,
         "comment": receipt.comment,
     }
@@ -661,6 +700,9 @@ def list_deleted_receipts(db: Session = Depends(get_db), _: None = Depends(requi
             "amount_net": float(r.amount_net) if r.amount_net else None,
             "vat_amount": float(r.vat_amount) if r.vat_amount else None,
             "vat_rate": float(r.vat_rate) if r.vat_rate else None,
+            "currency": r.currency or 'SEK',
+            "foreign_amount": float(r.foreign_amount) if r.foreign_amount else None,
+            "exchange_rate": float(r.exchange_rate) if r.exchange_rate else None,
             "receipt_date": r.receipt_date.isoformat() if r.receipt_date else None,
             "comment": r.comment,
             "image_filename": r.image_filename,
@@ -766,7 +808,7 @@ def export_receipts_csv(
 
     buf = io.StringIO()
     writer = csv.writer(buf)
-    writer.writerow(["datum", "butik", "brutto", "netto", "moms", "moms_procent", "kommentar", "användare"])
+    writer.writerow(["datum", "butik", "brutto", "netto", "moms", "moms_procent", "valuta", "utl_belopp", "valutakurs", "kommentar", "användare"])
     for r in rows:
         writer.writerow([
             r.receipt_date.isoformat() if r.receipt_date else "",
@@ -775,6 +817,9 @@ def export_receipts_csv(
             float(r.amount_net)   if r.amount_net   is not None else "",
             float(r.vat_amount)   if r.vat_amount   is not None else "",
             float(r.vat_rate)     if r.vat_rate     is not None else "",
+            r.currency or "SEK",
+            float(r.foreign_amount) if r.foreign_amount is not None else "",
+            float(r.exchange_rate)  if r.exchange_rate  is not None else "",
             r.comment or "",
             r.user_name or "",
         ])
@@ -789,6 +834,29 @@ def export_receipts_csv(
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+# --------------------------------------------------------------------------- #
+# Valuta-hjälpfunktioner och endpoint                                          #
+# --------------------------------------------------------------------------- #
+
+def _upsert_exchange_rate(db: Session, currency: str, rate: Optional[float]) -> None:
+    """Spara senast använda valutakurs i cachen. SEK med kurs 1.0 sparas alltid."""
+    if rate is None:
+        return
+    cached = db.query(ExchangeRateCache).filter(ExchangeRateCache.currency == currency).first()
+    if cached:
+        cached.rate = Decimal(str(rate))
+        cached.updated_at = datetime.utcnow()
+    else:
+        db.add(ExchangeRateCache(currency=currency, rate=Decimal(str(rate))))
+
+
+@app.get("/api/exchange-rates")
+def get_exchange_rates(db: Session = Depends(get_db), _: None = Depends(require_auth)):
+    """Returnera senast sparade valutakurser per valuta."""
+    rows = db.query(ExchangeRateCache).all()
+    return {r.currency: float(r.rate) for r in rows}
 
 
 # --------------------------------------------------------------------------- #

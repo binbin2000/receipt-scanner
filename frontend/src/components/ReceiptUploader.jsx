@@ -392,28 +392,41 @@ function MField({ label, children }) {
   )
 }
 
+const CURRENCIES = ['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK', 'CHF', 'JPY', 'PLN', 'CZK', 'HUF', 'CAD', 'AUD']
+
 /* ══════════════════════════════════════════════════════════════════════════ */
 /* Manuell registreringsmodal                                                 */
 /* ══════════════════════════════════════════════════════════════════════════ */
 function ManualReceiptModal({ onClose, onSaved, authName = null }) {
   const imgRef = useRef()
 
-  const [userName,    setUserName]    = useState(() => {
+  const [userName,      setUserName]      = useState(() => {
     if (authName) return authName
     try { return localStorage.getItem('receipt_user_name') ?? '' } catch { return '' }
   })
-  const [storeName,   setStoreName]   = useState('')
-  const [receiptDate, setReceiptDate] = useState('')
-  const [amountGross, setAmountGross] = useState('')
-  const [amountNet,   setAmountNet]   = useState('')
-  const [vatAmount,   setVatAmount]   = useState('')
-  const [vatRate,     setVatRate]     = useState(25)
-  const [comment,     setComment]     = useState('')
-  const [imgFile,     setImgFile]     = useState(null)
-  const [imgPreview,  setImgPreview]  = useState(null)
-  const [loading,     setLoading]     = useState(false)
-  const [error,       setError]       = useState(null)
-  const [success,     setSuccess]     = useState(false)
+  const [storeName,     setStoreName]     = useState('')
+  const [receiptDate,   setReceiptDate]   = useState('')
+  const [amountGross,   setAmountGross]   = useState('')
+  const [amountNet,     setAmountNet]     = useState('')
+  const [vatAmount,     setVatAmount]     = useState('')
+  const [vatRate,       setVatRate]       = useState(25)
+  const [currency,      setCurrency]      = useState('SEK')
+  const [foreignAmount, setForeignAmount] = useState('')
+  const [exchangeRate,  setExchangeRate]  = useState('1.0')
+  const [rateCache,     setRateCache]     = useState({})
+  const [comment,       setComment]       = useState('')
+  const [imgFile,       setImgFile]       = useState(null)
+  const [imgPreview,    setImgPreview]    = useState(null)
+  const [loading,       setLoading]       = useState(false)
+  const [error,         setError]         = useState(null)
+  const [success,       setSuccess]       = useState(false)
+
+  // Hämta valutakurscachen vid mount
+  useEffect(() => {
+    fetch('/api/exchange-rates').then(r => r.ok ? r.json() : {}).then(data => {
+      setRateCache(data)
+    }).catch(() => {})
+  }, [])
 
   useEffect(() => {
     const fn = (e) => { if (e.key === 'Escape') onClose() }
@@ -471,6 +484,38 @@ function ManualReceiptModal({ onClose, onSaved, authName = null }) {
     }
   }
 
+  const handleCurrencyChange = (val) => {
+    setCurrency(val)
+    if (val === 'SEK') {
+      setExchangeRate('1.0')
+      setForeignAmount('')
+    } else if (rateCache[val]) {
+      setExchangeRate(String(rateCache[val]))
+    }
+  }
+
+  const handleForeignAmountChange = (val) => {
+    setForeignAmount(val)
+    const fa = parseFloat(String(val).replace(',', '.'))
+    const er = parseFloat(String(exchangeRate).replace(',', '.'))
+    if (!isNaN(fa) && !isNaN(er) && er > 0) {
+      const gross = (fa * er).toFixed(2)
+      setAmountGross(gross)
+      calcFromGross(gross, vatRate)
+    }
+  }
+
+  const handleExchangeRateChange = (val) => {
+    setExchangeRate(val)
+    const fa = parseFloat(String(foreignAmount).replace(',', '.'))
+    const er = parseFloat(String(val).replace(',', '.'))
+    if (!isNaN(fa) && !isNaN(er) && er > 0) {
+      const gross = (fa * er).toFixed(2)
+      setAmountGross(gross)
+      calcFromGross(gross, vatRate)
+    }
+  }
+
   const toB64 = (file) => new Promise((resolve, reject) => {
     const reader = new FileReader()
     reader.onload = () => resolve(reader.result.split(',')[1])
@@ -498,17 +543,21 @@ function ManualReceiptModal({ onClose, onSaved, authName = null }) {
         imageFilename = imgFile.name
       }
 
+      const isForeign = currency !== 'SEK'
       const body = {
-        user_name:     userName || null,
-        store_name:    storeName || null,
-        amount_gross:  parse(amountGross),
-        amount_net:    parse(amountNet),
-        vat_amount:    parse(vatAmount),
-        vat_rate:      parse(vatRate),
-        receipt_date:  receiptDate || null,
-        comment:       comment || null,
-        image_base64:  imageBase64,
-        image_filename: imageFilename,
+        user_name:          userName || null,
+        store_name:         storeName || null,
+        amount_gross:       parse(amountGross),
+        amount_net:         parse(amountNet),
+        vat_amount:         parse(vatAmount),
+        vat_rate:           parse(vatRate),
+        currency:           currency || 'SEK',
+        foreign_amount:     isForeign ? parse(foreignAmount) : null,
+        exchange_rate:      isForeign ? parse(exchangeRate) : 1.0,
+        receipt_date:       receiptDate || null,
+        comment:            comment || null,
+        image_base64:       imageBase64,
+        image_filename:     imageFilename,
         image_content_type: imgFile?.type || null,
       }
 
@@ -599,6 +648,30 @@ function ManualReceiptModal({ onClose, onSaved, authName = null }) {
 
           {/* Belopp */}
           <span style={m.sectionLbl}>Belopp & moms</span>
+
+          {/* Valuta */}
+          <div style={{ display: 'grid', gridTemplateColumns: '140px 1fr', gap: 14, marginBottom: 14, alignItems: 'end' }}>
+            <MField label="Valuta">
+              <select style={{ ...mInputBase, cursor: 'pointer' }} value={currency} onChange={e => handleCurrencyChange(e.target.value)}>
+                {CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </MField>
+            {currency !== 'SEK' && (
+              <MField label={`Belopp i ${currency}`}>
+                <input style={mInputBase} type="number" step="0.01" value={foreignAmount}
+                  onChange={e => handleForeignAmountChange(e.target.value)} placeholder="0.00" />
+              </MField>
+            )}
+          </div>
+          {currency !== 'SEK' && (
+            <div style={{ maxWidth: 260, marginBottom: 14 }}>
+              <MField label={`Valutakurs (SEK per 1 ${currency})`}>
+                <input style={mInputBase} type="number" step="0.0001" value={exchangeRate}
+                  onChange={e => handleExchangeRateChange(e.target.value)} placeholder="11.50" />
+              </MField>
+            </div>
+          )}
+
           <div style={{ maxWidth: 160, marginBottom: 14 }}>
             <MField label="Momssats (%)">
               <input style={mInputBase} type="number" step="1" value={vatRate}
@@ -606,15 +679,15 @@ function ManualReceiptModal({ onClose, onSaved, authName = null }) {
             </MField>
           </div>
           <div style={m.grid3}>
-            <MField label="Brutto inkl. moms">
+            <MField label="Brutto inkl. moms (SEK)">
               <input style={mInputBase} type="number" step="0.01" value={amountGross}
                 onChange={e => handleGrossChange(e.target.value)} placeholder="249.90" />
             </MField>
-            <MField label="Netto exkl. moms">
+            <MField label="Netto exkl. moms (SEK)">
               <input style={mInputBase} type="number" step="0.01" value={amountNet}
                 onChange={e => handleNetChange(e.target.value)} placeholder="199.92" />
             </MField>
-            <MField label="Momsbelopp">
+            <MField label="Momsbelopp (SEK)">
               <input style={mInputBase} type="number" step="0.01" value={vatAmount}
                 onChange={e => setVatAmount(e.target.value)} placeholder="49.98" />
             </MField>

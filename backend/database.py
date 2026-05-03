@@ -3,7 +3,7 @@ import logging
 from sqlalchemy import create_engine, Column, Integer, Numeric, Date, Text, LargeBinary, String, DateTime, Boolean, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
-from datetime import datetime
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +33,17 @@ class Receipt(Base):
     is_deleted         = Column(Boolean, default=False, nullable=False, server_default='false')
     is_archived        = Column(Boolean, default=False, nullable=False, server_default='false')
     is_archive_summary = Column(Boolean, default=False, nullable=False, server_default='false')
+    currency           = Column(String(3), nullable=False, server_default='SEK')
+    foreign_amount     = Column(Numeric(12, 2), nullable=True)
+    exchange_rate      = Column(Numeric(12, 6), nullable=True, server_default='1.0')
+
+
+class ExchangeRateCache(Base):
+    __tablename__ = "exchange_rate_cache"
+
+    currency   = Column(String(3), primary_key=True)
+    rate       = Column(Numeric(12, 6), nullable=False)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
 def get_db():
@@ -60,6 +71,9 @@ REQUIRED_COLUMNS = [
     ("is_deleted",        "BOOLEAN NOT NULL DEFAULT FALSE"),
     ("is_archived",       "BOOLEAN NOT NULL DEFAULT FALSE"),
     ("is_archive_summary","BOOLEAN NOT NULL DEFAULT FALSE"),
+    ("currency",          "VARCHAR(3) NOT NULL DEFAULT 'SEK'"),
+    ("foreign_amount",    "NUMERIC(12,2)"),
+    ("exchange_rate",     "NUMERIC(12,6)"),
 ]
 
 
