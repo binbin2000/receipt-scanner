@@ -183,13 +183,25 @@ export default function ReceiptForm({ ocrResult, onSaved, onBack, authName = nul
   const handleVatRateChange = (val) => {
     setVatRate(val)
     const r = parseFloat(String(val).replace(',', '.'))
-    if (!isNaN(r) && r > 0) {
-      const gross = parseFloat(String(amountGross).replace(',', '.'))
+    const rate = isNaN(r) ? 0 : r
+    // Utländsk valuta: netto är ankaret (= foreign_amount × kurs), räkna om brutto
+    if (currency !== 'SEK' && foreignAmount !== '') {
       const net = parseFloat(String(amountNet).replace(',', '.'))
+      if (!isNaN(net)) {
+        const newGross = (net * (1 + rate / 100)).toFixed(2)
+        setAmountGross(newGross)
+        setVatAmount((parseFloat(newGross) - net).toFixed(2))
+        return
+      }
+    }
+    // SEK: brutto är ankaret
+    if (rate > 0) {
+      const gross = parseFloat(String(amountGross).replace(',', '.'))
+      const net   = parseFloat(String(amountNet).replace(',', '.'))
       if (!isNaN(gross)) {
         calcFromGross(amountGross, val, setAmountNet, setVatAmount)
       } else if (!isNaN(net)) {
-        const newGross = net * (1 + r / 100)
+        const newGross = net * (1 + rate / 100)
         setAmountGross(newGross.toFixed(2))
         setVatAmount((newGross - net).toFixed(2))
       }
