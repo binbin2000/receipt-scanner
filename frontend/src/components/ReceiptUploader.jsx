@@ -399,6 +399,10 @@ const CURRENCIES = ['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK', 'CHF', 'JPY', 'PLN
 /* ══════════════════════════════════════════════════════════════════════════ */
 function ManualReceiptModal({ onClose, onSaved, authName = null }) {
   const imgRef = useRef()
+  const boxRef = useRef()
+  // iOS: native date picker fires a synthetic click on the overlay when dismissed.
+  // Track that pointerdown started outside the box before allowing overlay-click to close.
+  const pointerDownOutside = useRef(false)
 
   const [userName,      setUserName]      = useState(() => {
     if (authName) return authName
@@ -617,8 +621,12 @@ function ManualReceiptModal({ onClose, onSaved, authName = null }) {
   }
 
   return (
-    <div style={m.overlay} onClick={e => { if (e.target === e.currentTarget) onClose() }}>
-      <div style={m.box}>
+    <div
+      style={m.overlay}
+      onPointerDown={e => { pointerDownOutside.current = !boxRef.current?.contains(e.target) }}
+      onClick={e => { if (e.target === e.currentTarget && pointerDownOutside.current) onClose() }}
+    >
+      <div ref={boxRef} style={m.box}>
 
         <div style={m.header}>
           <span style={m.title}>✏️ Registrera kvitto manuellt</span>
