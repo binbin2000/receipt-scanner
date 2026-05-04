@@ -649,7 +649,7 @@ function ManualReceiptModal({ onClose, onSaved, authName = null }) {
 
           {/* Inlämnad av */}
           <span style={m.sectionLbl}>Inlämnad av</span>
-          <div style={m.grid2}>
+          <div style={{ ...m.grid2, alignItems: 'end' }}>
             <MField label={authName ? 'Namn (förifyllt från inloggning)' : 'Namn'}>
               <input style={mInputBase} type="text" value={userName}
                 onChange={e => setUserName(e.target.value)} placeholder="Ditt namn" />
@@ -666,7 +666,7 @@ function ManualReceiptModal({ onClose, onSaved, authName = null }) {
           </MField>
 
           {/* Datum */}
-          <span style={m.sectionLbl}>Kvittodatum</span>
+          <span style={m.sectionLbl}>Betaldatum</span>
           <div style={{ maxWidth: 180, marginBottom: 14 }}>
             <MField label="Datum">
               <input style={mInputBase} type="date" value={receiptDate}
